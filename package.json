@@ -1,0 +1,22 @@
+{
+  "name": "clore-scraper",
+  "version": "1.0.0",
+  "description": "Shopify store scraper that extracts products and variants in Clore database format",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "scrape": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "clean": "rm -rf dist output/*.json"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "dotenv": "^16.0.3",
+    "@supabase/supabase-js": "^2.38.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  }
+}
