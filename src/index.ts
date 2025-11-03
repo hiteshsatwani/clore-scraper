@@ -12,7 +12,11 @@ import { ScrapedStoreData } from './types';
 /**
  * Main scraper function - returns scraped data without saving to file
  */
-async function scrapeShopifyStore(domain: string): Promise<{ success: boolean; data?: ScrapedStoreData; error?: string }> {
+async function scrapeShopifyStore(
+  domain: string,
+  logoUrl?: string,
+  description?: string
+): Promise<{ success: boolean; data?: ScrapedStoreData; error?: string }> {
   try {
     // Step 1: Normalize domain
     logger.info(`🔍 Normalizing domain: ${domain}`);
@@ -65,8 +69,8 @@ async function scrapeShopifyStore(domain: string): Promise<{ success: boolean; d
       shopify_connection_status: 'scraped',
       default_currency: shopInfo.currency,
       supported_currencies: [shopInfo.currency],
-      logo_url: shopInfo.logo_url || null,
-      description: shopInfo.description || null,
+      logo_url: logoUrl || shopInfo.logo_url || null,
+      description: description || shopInfo.description || null,
     };
 
     // Step 8: Compile final output
@@ -152,10 +156,12 @@ async function main(): Promise<void> {
   const domain = args[0];
   const email = args[1];
   const password = args[2];
+  const logoUrl = args[3] || undefined; // Optional logo URL
+  const description = args[4] || undefined; // Optional description
 
   // Step 1: Scrape Shopify store
   logger.info('🚀 Starting Clore Shopify Scraper');
-  const scrapeResult = await scrapeShopifyStore(domain);
+  const scrapeResult = await scrapeShopifyStore(domain, logoUrl, description);
 
   if (!scrapeResult.success) {
     logger.fail('Scraping failed, aborting');
@@ -196,13 +202,14 @@ function printUsage(): void {
   logger.fail('Usage:');
   logger.info('');
   logger.info('Scrape and sync Shopify store:');
-  logger.info('   npm run scrape -- <domain> <email> <password>');
+  logger.info('   npm run scrape -- <domain> <email> <password> [logoUrl] [description]');
   logger.info('');
   logger.info('Delete a store by ID:');
   logger.info('   npm run scrape -- delete <storeid> <email> <password>');
   logger.info('');
   logger.info('Examples:');
   logger.info('   npm run scrape -- worstwork.com hitesh@clore.app Testing123');
+  logger.info('   npm run scrape -- worstwork.com hitesh@clore.app Testing123 "https://example.com/logo.png" "My Store Description"');
   logger.info('   npm run scrape -- delete 54b5de3c-45e0-475c-8bc9-a8d6025bacfb hitesh@clore.app Testing123');
   logger.info('');
 }
