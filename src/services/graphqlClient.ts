@@ -29,7 +29,7 @@ interface SyncResponse {
 }
 
 /**
- * Syncs scraped store and products via GraphQL mutation
+ * Syncs scraped store and products via GraphQL mutation with batching
  */
 export async function syncScrapedStoreAndProducts(
   token: string,
@@ -41,96 +41,133 @@ export async function syncScrapedStoreAndProducts(
     logger.success(`🎨 Store logo_url being sent: ${data.store.logo_url || 'none'}`);
     logger.success(`📝 Store description being sent: ${data.store.description || 'none'}`);
 
-    // Build the GraphQL query
-    const query = `
-      mutation SyncScrapedStore(
-        $store: ScrapedStoreDataInput!
-        $products: [ScrapedProductInput!]!
-        $variants: [ScrapedProductVariantInput!]!
-      ) {
-        syncScrapedStoreAndProducts(
-          store: $store
-          products: $products
-          variants: $variants
+    const BATCH_SIZE = 20; // Process 20 products at a time to avoid 413 payload size errors
+    const totalProducts = data.products.length;
+    const totalVariants = data.product_variants.length;
+
+    logger.info(`📦 Processing ${totalProducts} products and ${totalVariants} variants in batches of ${BATCH_SIZE}...`);
+
+    let totalProductsCreated = 0;
+    let totalVariantsCreated = 0;
+    let allErrors: string[] = [];
+    let storeId: string | undefined;
+
+    // Process products in batches
+    for (let i = 0; i < totalProducts; i += BATCH_SIZE) {
+      const productBatch = data.products.slice(i, Math.min(i + BATCH_SIZE, totalProducts));
+      const variantBatch = data.product_variants.filter(v =>
+        productBatch.some(p => p.shopify_id === v.shopify_product_id)
+      );
+
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(totalProducts / BATCH_SIZE);
+
+      logger.info(`  📦 Batch ${batchNum}/${totalBatches}: Syncing ${productBatch.length} products and ${variantBatch.length} variants...`);
+
+      // Build the GraphQL query
+      const query = `
+        mutation SyncScrapedStore(
+          $store: ScrapedStoreDataInput!
+          $products: [ScrapedProductInput!]!
+          $variants: [ScrapedProductVariantInput!]!
         ) {
-          success
-          message
-          storeId
-          productsCreated
-          variantsCreated
-          errors
-        }
-      }
-    `;
-
-    // Execute mutation with retry
-    const result = await retryWithBackoff(
-      async () => {
-        const response = await axios.post<SyncResponse>(
-          CLORE_API_URL,
-          {
-            query,
-            variables: {
-              store: data.store,
-              products: data.products,
-              variants: data.product_variants,
-            },
-          },
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            timeout: 120000, // 2 minutes
+          syncScrapedStoreAndProducts(
+            store: $store
+            products: $products
+            variants: $variants
+          ) {
+            success
+            message
+            storeId
+            productsCreated
+            variantsCreated
+            errors
           }
-        );
+        }
+      `;
 
-        return response;
-      },
-      'GraphQL sync request'
-    );
+      // Execute mutation with retry
+      const result = await retryWithBackoff(
+        async () => {
+          const response = await axios.post<SyncResponse>(
+            CLORE_API_URL,
+            {
+              query,
+              variables: {
+                store: data.store,
+                products: productBatch,
+                variants: variantBatch,
+              },
+            },
+            {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              timeout: 120000, // 2 minutes
+            }
+          );
 
-    // Handle GraphQL errors
-    if (result.data.errors) {
-      const errorMessages = result.data.errors.map((e) => e.message).join(', ');
-      logger.error(`❌ GraphQL error: ${errorMessages}`);
-      return {
-        success: false,
-        message: `GraphQL error: ${errorMessages}`,
-      };
+          return response;
+        },
+        `GraphQL sync batch ${batchNum}`
+      );
+
+      // Handle GraphQL errors
+      if (result.data.errors) {
+        const errorMessages = result.data.errors.map((e) => e.message).join(', ');
+        logger.error(`❌ GraphQL error in batch ${batchNum}: ${errorMessages}`);
+        allErrors.push(`Batch ${batchNum}: ${errorMessages}`);
+        continue;
+      }
+
+      // Handle successful response
+      const mutation = result.data.data?.syncScrapedStoreAndProducts;
+      if (!mutation) {
+        logger.error(`❌ No mutation result in batch ${batchNum}`);
+        allErrors.push(`Batch ${batchNum}: No mutation result`);
+        continue;
+      }
+
+      if (!mutation.success) {
+        logger.fail(`❌ Batch ${batchNum} failed: ${mutation.message}`);
+        allErrors.push(`Batch ${batchNum}: ${mutation.message}`);
+        continue;
+      }
+
+      // Accumulate results
+      if (mutation.storeId && !storeId) {
+        storeId = mutation.storeId;
+      }
+      totalProductsCreated += mutation.productsCreated;
+      totalVariantsCreated += mutation.variantsCreated;
+      if (mutation.errors?.length) {
+        allErrors.push(...mutation.errors);
+      }
+
+      logger.success(`✅ Batch ${batchNum} complete: ${mutation.productsCreated} products, ${mutation.variantsCreated} variants`);
     }
 
-    // Handle successful response
-    const mutation = result.data.data?.syncScrapedStoreAndProducts;
-    if (!mutation) {
-      logger.error('❌ No mutation result in response');
-      return {
-        success: false,
-        message: 'No mutation result in response',
-      };
-    }
-
-    if (!mutation.success) {
-      logger.fail(`❌ Mutation failed: ${mutation.message}`);
-      return {
-        success: false,
-        message: mutation.message,
-        result: mutation,
-      };
-    }
-
-    logger.success(`✅ Sync successful!`);
-    logger.success(`📊 Summary:`, {
-      storeId: mutation.storeId,
-      productsCreated: mutation.productsCreated,
-      variantsCreated: mutation.variantsCreated,
-      errors: mutation.errors?.length || 0,
+    // Summary
+    const overallSuccess = allErrors.length === 0;
+    logger.success(`📊 Overall Summary:`, {
+      storeId,
+      productsCreated: totalProductsCreated,
+      variantsCreated: totalVariantsCreated,
+      errors: allErrors.length,
     });
 
     return {
-      success: true,
-      message: mutation.message,
-      result: mutation,
+      success: overallSuccess,
+      message: overallSuccess ? 'All batches synced successfully' : `Sync completed with ${allErrors.length} errors`,
+      result: {
+        success: overallSuccess,
+        message: overallSuccess ? 'Sync successful' : 'Sync completed with errors',
+        storeId,
+        productsCreated: totalProductsCreated,
+        variantsCreated: totalVariantsCreated,
+        errors: allErrors,
+      },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
