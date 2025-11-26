@@ -38,6 +38,8 @@ export async function syncScrapedStoreAndProducts(
   try {
     logger.info(`📤 Syncing scraped store to GraphQL API...`);
     logger.debug(`API URL: ${CLORE_API_URL}`);
+    logger.success(`🎨 Store logo_url being sent: ${data.store.logo_url || 'none'}`);
+    logger.success(`📝 Store description being sent: ${data.store.description || 'none'}`);
 
     // Build the GraphQL query
     const query = `

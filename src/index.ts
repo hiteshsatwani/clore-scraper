@@ -73,6 +73,10 @@ async function scrapeShopifyStore(
       description: description || shopInfo.description || null,
     };
 
+    // Log the logo URL being set
+    logger.success(`🎨 Store logo_url: ${storeData.logo_url || 'not set (will use default)'}`);
+    logger.success(`📝 Store description: ${storeData.description || 'not set'}`);
+
     // Step 8: Compile final output
     logger.info(`📝 Compiling scraped data...`);
     const output: ScrapedStoreData = {
@@ -115,6 +119,56 @@ async function main(): Promise<void> {
   }
 
   const command = args[0];
+
+  // Handle preview command (scrape only, no sync)
+  if (command === 'preview') {
+    if (args.length < 2) {
+      logger.fail('Usage: npm run scrape -- preview <domain> [logoUrl] [description]');
+      process.exit(1);
+    }
+
+    const domain = args[1];
+    const logoUrl = args[2] || undefined;
+    const description = args[3] || undefined;
+
+    logger.info('🚀 Starting Shopify Scraper (Preview Mode - No Sync)');
+    const scrapeResult = await scrapeShopifyStore(domain, logoUrl, description);
+
+    if (!scrapeResult.success) {
+      logger.fail('Scraping failed');
+      process.exit(1);
+    }
+
+    logger.success('✅ Scraping complete! Data preview:');
+    logger.info('');
+
+    // Print overview summary instead of full data
+    const data = scrapeResult.data!;
+    const overview = {
+      store: {
+        name: data.store.display_name,
+        handle: data.store.store_handle,
+        url: data.store.store_url,
+        currency: data.store.default_currency,
+        logo_url: data.store.logo_url,
+        description: data.store.description,
+      },
+      summary: {
+        total_products: data.products.length,
+        total_variants: data.product_variants.length,
+        sample_products: data.products.slice(0, 3).map(p => ({
+          title: p.title,
+          handle: p.handle,
+          images: p.images?.length || 0,
+        })),
+      },
+    };
+    console.log(JSON.stringify(overview, null, 2));
+    logger.info('');
+    logger.success('💡 To sync this data to Clore, run:');
+    logger.info(`   npm run scrape -- ${domain} <email> <password>`);
+    process.exit(0);
+  }
 
   // Handle delete command
   if (command === 'delete') {
